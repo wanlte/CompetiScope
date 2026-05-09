@@ -1,0 +1,95 @@
+# ============================================================
+# 竞品分析Agent系统 - 依赖包列表
+# ============================================================
+
+# 核心依赖
+# ----------------------------------------
+
+# LLM 接口
+openai>=1.0.0
+anthropic>=0.18.0
+
+# HTTP 请求
+httpx>=0.25.0
+aiohttp>=3.9.0
+requests>=2.31.0
+
+# 搜索引擎
+serpapi>=0.1.0
+googlesearch-python>=1.2.0
+duckduckgo-search>=4.0.0
+
+# 配置管理
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# 异步处理
+asyncio-throttle>=1.0.2
+tenacity>=8.2.0
+
+# 数据处理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# 文件和路径处理
+pathlib>=1.0.0
+
+# JSON 处理
+orjson>=3.9.0
+
+# Markdown 处理
+markdown>=3.5.0
+markdownify>=0.11.0
+
+# 日期时间处理
+python-dateutil>=2.8.0
+
+# 日志处理
+loguru>=0.7.0
+
+# 类型检查（开发依赖）
+typing-extensions>=4.8.0
+
+# 可选依赖
+# ----------------------------------------
+
+# 知识库/向量存储（可选）
+# chromadb>=0.4.0
+# sentence-transformers>=2.2.0
+
+# 数据可视化（可选）
+# matplotlib>=3.7.0
+# seaborn>=0.12.0
+
+# PDF 生成（可选）
+# reportlab>=4.0.0
+# weasyprint>=60.0
+
+# Excel 导出（可选）
+# openpyxl>=3.1.0
+
+# 浏览器自动化（高级搜索可选）
+# playwright>=1.40.0
+# selenium>=4.15.0
+
+# 开发/测试依赖
+# ----------------------------------------
+
+# 测试框架
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# 类型检查
+mypy>=1.7.0
+
+# 代码格式化
+black>=23.0.0
+isort>=5.12.0
+
+# Linting
+ruff>=0.1.0
+
+# 开发服务器（如果需要）
+fastapi>=0.104.0
+uvicorn>=0.24.0

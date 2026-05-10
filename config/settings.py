@@ -3,7 +3,6 @@
 包含LLM配置、搜索配置、Agent配置等
 """
 import os
-from typing import Literal
 from pathlib import Path
 
 # 项目根目录
@@ -16,47 +15,22 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class LLMConfig:
     """LLM配置类，支持多种模型提供商"""
 
-    # 支持的模型提供商
-    PROVIDERS = Literal["deepseek", "openai"]
-
     # DeepSeek 配置
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
-    # OpenAI 配置
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-    # 当前使用的提供商
-    ACTIVE_PROVIDER: PROVIDERS = os.getenv("LLM_PROVIDER", "deepseek")
-
     @classmethod
     def get_api_key(cls) -> str:
-        """获取当前提供商的API密钥"""
-        if cls.ACTIVE_PROVIDER == "deepseek":
-            return cls.DEEPSEEK_API_KEY
-        return cls.OPENAI_API_KEY
+        return cls.DEEPSEEK_API_KEY
 
     @classmethod
     def get_base_url(cls) -> str:
-        """获取当前提供商的API基础URL"""
-        if cls.ACTIVE_PROVIDER == "deepseek":
-            return cls.DEEPSEEK_BASE_URL
-        return cls.OPENAI_BASE_URL
+        return cls.DEEPSEEK_BASE_URL
 
     @classmethod
     def get_model(cls) -> str:
-        """获取当前使用的模型"""
-        if cls.ACTIVE_PROVIDER == "deepseek":
-            return cls.DEEPSEEK_MODEL
-        return cls.OPENAI_MODEL
-
-    @classmethod
-    def switch_provider(cls, provider: PROVIDERS) -> None:
-        """切换LLM提供商"""
-        cls.ACTIVE_PROVIDER = provider
+        return cls.DEEPSEEK_MODEL
 
 
 # ============================================================

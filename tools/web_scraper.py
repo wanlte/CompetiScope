@@ -407,7 +407,7 @@ class WebScraper:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_exception_type=(httpx.TimeoutException, httpx.NetworkError),
+        retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
         reraise=True
     )
     def scrape(self, url: str) -> ScrapedContent:

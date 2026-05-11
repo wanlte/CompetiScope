@@ -258,7 +258,7 @@ def render_sidebar():
         - 战略建议
         """)
 
-    return api_key, model, base_url, provider
+    return api_key, model, base_url, search_engine
 
 
 # ============================================================
@@ -422,7 +422,7 @@ def main():
     init_session_state()
 
     # 渲染侧边栏
-    api_key, model, base_url = render_sidebar()
+    api_key, model, base_url,search_engine= render_sidebar()
 
     # 渲染主页面
     render_main_page(api_key, model, base_url)

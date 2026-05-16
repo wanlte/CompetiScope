@@ -162,28 +162,154 @@ class LogConfig:
 
 
 # ============================================================
-# 知识库配置（可选）
+# LLM Provider 配置
+# ============================================================
+
+class ProviderConfig:
+    """LLM Provider 配置（lazy — reads env at access time to support testing）"""
+
+    @staticmethod
+    def _api_key() -> str:
+        return os.getenv("DEEPSEEK_API_KEY", "")
+
+    @staticmethod
+    def _base_url() -> str:
+        return os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+
+    @staticmethod
+    def _model() -> str:
+        return os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+    @classmethod
+    def to_dict(cls) -> dict:
+        return {
+            "api_key": cls._api_key(),
+            "base_url": cls._base_url(),
+            "model": cls._model(),
+            "temperature": float(os.getenv("LLM_TEMPERATURE", "0.7")),
+            "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "4096")),
+            "timeout": int(os.getenv("LLM_TIMEOUT", "60")),
+            "max_retries": int(os.getenv("LLM_MAX_RETRIES", "3")),
+            "retry_delay": float(os.getenv("LLM_RETRY_DELAY", "2.0")),
+            "input_price_per_1k": float(os.getenv("LLM_INPUT_PRICE", "0.00014")),
+            "output_price_per_1k": float(os.getenv("LLM_OUTPUT_PRICE", "0.00028")),
+        }
+
+
+# ============================================================
+# 缓存配置
+# ============================================================
+
+class CacheConfig:
+    """LLM 响应缓存配置"""
+
+    # 是否启用缓存
+    ENABLED: bool = os.getenv("CACHE_ENABLED", "true").lower() == "true"
+
+    # 缓存目录
+    CACHE_DIR: str = os.getenv("CACHE_DIR", str(BASE_DIR / ".cache" / "llm"))
+
+    # 缓存过期时间（秒），默认 24 小时
+    TTL_SECONDS: int = int(os.getenv("CACHE_TTL", "86400"))
+
+
+# ============================================================
+# Agent 循环配置 (Phase 2 — ReAct Loop)
+# ============================================================
+
+class AgentLoopConfig:
+    """ReAct Agent 循环配置"""
+
+    # 最大推理步数
+    MAX_STEPS: int = int(os.getenv("AGENT_MAX_STEPS", "12"))
+
+    # 反思轮数
+    REFLECTION_ROUNDS: int = int(os.getenv("AGENT_REFLECTION_ROUNDS", "2"))
+
+    # 是否启用反思
+    REFLECTION_ENABLED: bool = os.getenv("AGENT_REFLECTION_ENABLED", "true").lower() == "true"
+
+    # 反思触发阈值（分数低于此值触发修订）
+    REFLECTION_SCORE_THRESHOLD: int = int(os.getenv("AGENT_REFLECTION_THRESHOLD", "7"))
+
+
+# ============================================================
+# Embedding 配置 (Phase 3 — RAG)
+# ============================================================
+
+class EmbedderConfig:
+    """Embedding 服务配置"""
+
+    # Provider: "local" (SentenceTransformer, free) or "openai" (API-based)
+    EMBEDDING_PROVIDER: str = os.getenv("EMBEDDING_PROVIDER", "local")
+
+    # Local model name (SentenceTransformer)
+    LOCAL_EMBEDDING_MODEL: str = os.getenv(
+        "LOCAL_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"
+    )
+
+    # OpenAI embedding model
+    OPENAI_EMBEDDING_MODEL: str = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+    # OpenAI API key (uses DEEPSEEK_API_KEY if not set, for convenience)
+    OPENAI_EMBEDDING_API_KEY: str = os.getenv(
+        "OPENAI_API_KEY", os.getenv("DEEPSEEK_API_KEY", "")
+    )
+
+    # OpenAI base URL
+    OPENAI_EMBEDDING_BASE_URL: str = os.getenv(
+        "OPENAI_EMBEDDING_BASE_URL", "https://api.openai.com/v1"
+    )
+
+
+# ============================================================
+# 知识库配置 (Phase 3 — RAG)
 # ============================================================
 
 class KnowledgeBaseConfig:
-    """知识库配置（用于存储历史分析结果）"""
+    """知识库配置（向量存储 + RAG 检索）"""
 
     # 是否启用知识库
-    ENABLE_KNOWLEDGE_BASE: bool = os.getenv("ENABLE_KNOWLEDGE_BASE", "false").lower() == "true"
+    ENABLED: bool = os.getenv("ENABLE_KNOWLEDGE_BASE", "true").lower() == "true"
 
-    # 知识库存储路径
-    KNOWLEDGE_BASE_DIR: Path = Path(os.getenv("KNOWLEDGE_BASE_DIR", str(BASE_DIR / "knowledge_base")))
+    # 知识库持久化目录
+    PERSIST_DIR: str = os.getenv("KB_PERSIST_DIR", str(BASE_DIR / ".chromadb"))
 
-    # 知识库向量维度
-    EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "1536"))
+    # RAG 检索时返回的结果数
+    RAG_N_RESULTS: int = int(os.getenv("RAG_N_RESULTS", "5"))
 
-    # 相似度阈值
-    SIMILARITY_THRESHOLD: float = float(os.getenv("SIMILARITY_THRESHOLD", "0.7"))
+    # 向量搜索权重 (vs 关键词)
+    VECTOR_WEIGHT: float = float(os.getenv("RAG_VECTOR_WEIGHT", "0.6"))
+    KEYWORD_WEIGHT: float = float(os.getenv("RAG_KEYWORD_WEIGHT", "0.4"))
+
+    # 分块大小
+    CHUNK_SIZE: int = int(os.getenv("RAG_CHUNK_SIZE", "500"))
+    CHUNK_OVERLAP: int = int(os.getenv("RAG_CHUNK_OVERLAP", "50"))
+
+    # 是否在采集前检查缓存
+    CHECK_SEARCH_CACHE: bool = os.getenv("RAG_CHECK_SEARCH_CACHE", "true").lower() == "true"
+
+    # 是否在分析时注入历史数据
+    INJECT_HISTORY_IN_ANALYSIS: bool = os.getenv("RAG_INJECT_HISTORY", "true").lower() == "true"
 
 
 # ============================================================
 # 全局配置实例
 # ============================================================
+
+def get_provider_config() -> dict:
+    """获取 LLM Provider 配置字典"""
+    return ProviderConfig.to_dict()
+
+
+def get_cache_config() -> dict:
+    """获取缓存配置字典"""
+    return {
+        "enabled": CacheConfig.ENABLED,
+        "cache_dir": CacheConfig.CACHE_DIR,
+        "ttl_seconds": CacheConfig.TTL_SECONDS,
+    }
+
 
 def get_settings():
     """获取完整配置字典"""

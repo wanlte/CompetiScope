@@ -1,25 +1,36 @@
 """
-撰写Agent模块
+撰写Agent模块 (v2)
 
 负责将分析结果转化为专业的竞品分析报告，支持：
 - 完整分析报告
 - 执行摘要
 - 快速概览
+- SSE 流式生成
+
+Phase 1 升级: Provider 模式
+Phase 4 升级: SSE Streaming
 """
 
 import json
-from typing import Optional, Literal
+import asyncio
+from typing import Optional, Literal, AsyncIterator
 from datetime import datetime
 from dataclasses import dataclass
 from loguru import logger
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from config.prompts import WRITER_SYSTEM_PROMPT
-from config.settings import LLMConfig, LLMRequestConfig, OutputConfig
+from config.settings import (
+    LLMConfig, LLMRequestConfig, OutputConfig, ProviderConfig as SettingsProvider,
+    KnowledgeBaseConfig,
+)
+from llm.provider import BaseLLMProvider
+from llm.openai_provider import OpenAIProvider
+from llm.types import ProviderConfig as LLMProviderConfig
 from agents.analyst_agent import AnalysisReport, FeatureComparison, SWOTAnalysis
 from agents.collector_agent import CollectedData
+from rag.knowledge_base import KnowledgeBase
 
 
 @dataclass
@@ -44,27 +55,55 @@ class WriterAgent:
 
     def __init__(
         self,
+        provider: Optional[BaseLLMProvider] = None,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        knowledge_base: Optional[KnowledgeBase] = None,
     ):
         """
         初始化撰写Agent
 
         Args:
-            model: 模型名称（默认使用配置）
-            api_key: API密钥（默认使用配置）
-            base_url: API基础URL（默认使用配置）
+            provider: LLM Provider（优先使用，推荐）
+            model: 模型名称（回退兼容）
+            api_key: API密钥（回退兼容）
+            base_url: API基础URL（回退兼容）
+            knowledge_base: 知识库 (RAG)
         """
-        self.llm = ChatOpenAI(
-            model=model or LLMConfig.get_model(),
-            api_key=api_key or LLMConfig.get_api_key(),
-            base_url=base_url or LLMConfig.get_base_url(),
-            temperature=LLMRequestConfig.TEMPERATURE,
-            max_tokens=LLMRequestConfig.MAX_TOKENS,
-        )
+        if provider:
+            self.provider = provider
+        else:
+            provider_config = LLMProviderConfig(**SettingsProvider.to_dict())
+            if model:
+                provider_config.model = model
+            if api_key:
+                provider_config.api_key = api_key
+            if base_url:
+                provider_config.base_url = base_url
+            self.provider = OpenAIProvider(provider_config)
 
-        logger.info("WriterAgent初始化完成")
+        # 向后兼容
+        self.llm = self.provider
+
+        # 初始化知识库 (RAG)
+        self.kb = knowledge_base
+        if self.kb is None and KnowledgeBaseConfig.ENABLED:
+            try:
+                self.kb = KnowledgeBase(
+                    persist_dir=KnowledgeBaseConfig.PERSIST_DIR,
+                    enabled=True,
+                )
+                logger.info("KnowledgeBase (RAG) 已启用")
+            except Exception as exc:
+                logger.warning(f"KnowledgeBase 初始化失败，RAG 已停用: {exc}")
+                self.kb = KnowledgeBase(enabled=False)
+
+        logger.info("WriterAgent (v2) 初始化完成")
+
+    def _invoke(self, messages: list) -> str:
+        """同步 LLM 调用辅助方法"""
+        return asyncio.run(self.provider.ainvoke(messages)).content
 
     def write_full_report(
         self,
@@ -264,7 +303,84 @@ class WriterAgent:
         logger.info(f"报告已保存: {file_path}")
         return str(file_path)
 
+    # ==================== Phase 4: SSE Streaming ====================
+
+    async def astream_full_report(
+        self,
+        analysis_report: AnalysisReport,
+        collected_data: list[CollectedData],
+        metadata: Optional[ReportMetadata] = None,
+    ) -> AsyncIterator[str]:
+        """Stream full report generation — yields sections as they complete.
+
+        Usage (FastAPI SSE):
+            async for chunk in writer.astream_full_report(report, data):
+                yield {"event": "section", "data": chunk}
+        """
+        if metadata is None:
+            metadata = ReportMetadata(
+                title="竞品分析报告",
+                created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                report_type="full",
+            )
+
+        sections = [
+            ("cover", self._generate_cover(analysis_report, metadata)),
+            ("executive_summary", self._generate_executive_summary(analysis_report)),
+            ("market_overview", self._generate_market_overview(analysis_report)),
+            ("competitor_overview", self._generate_competitor_overview(analysis_report)),
+            ("feature_comparison", self._generate_feature_comparison_section(analysis_report)),
+            ("swot", self._generate_swot_section(analysis_report)),
+            ("competitive_landscape", self._generate_competitive_landscape_section(analysis_report)),
+            ("insights", self._generate_insights_section(analysis_report)),
+            ("risk_opportunity", self._generate_risk_opportunity_section(analysis_report)),
+            ("strategy", self._generate_strategy_section(analysis_report)),
+            ("appendix", self._generate_appendix(collected_data)),
+        ]
+
+        for section_name, section_content in sections:
+            yield json.dumps({"section": section_name, "content": section_content}, ensure_ascii=False)
+            await asyncio.sleep(0.01)  # yield control
+
+    async def awrite_full_report_async(
+        self,
+        analysis_report: AnalysisReport,
+        collected_data: list[CollectedData],
+        metadata: Optional[ReportMetadata] = None,
+    ) -> str:
+        """Async version of write_full_report — same result, non-blocking."""
+        return await asyncio.to_thread(
+            self.write_full_report, analysis_report, collected_data, metadata
+        )
+
     # ==================== 私有方法 ====================
+
+    def _get_historical_reports(self, competitors: list[str]) -> str:
+        """Retrieve historical report snippets for style and content reference."""
+        if not self.kb or not self.kb.enabled:
+            return ""
+
+        parts = []
+        for competitor in competitors:
+            try:
+                history = self.kb.get_competitor_history(competitor, n_results=2)
+                if history.get("reports"):
+                    parts.append(f"### {competitor} 历史报告参考")
+                    for r in history["reports"][:2]:
+                        parts.append(r.get("content", "")[:400])
+            except Exception as exc:
+                logger.debug(f"RAG report retrieval failed: {exc}")
+
+        return "\n\n".join(parts) if parts else ""
+
+    async def _ingest_report_to_kb(self, competitors: list[str], report: str, report_type: str):
+        """Store generated report in knowledge base."""
+        if not self.kb or not self.kb.enabled:
+            return
+        try:
+            await self.kb.ingest_report(competitors, report, report_type)
+        except Exception as exc:
+            logger.debug(f"KB report ingestion failed: {exc}")
 
     def _generate_cover(
         self,
@@ -486,6 +602,16 @@ class WriterAgent:
 
     def _generate_strategy_section(self, analysis_report: AnalysisReport) -> str:
         """生成战略建议章节"""
+        # RAG: retrieve historical reports for context
+        historical_ref = self._get_historical_reports(analysis_report.competitors)
+        rag_part = ""
+        if historical_ref:
+            rag_part = f"""
+
+历史分析参考（请参考其风格和深度，但不抄袭）：
+{historical_ref[:800]}
+"""
+
         prompt = f"""基于以下竞品分析结果，生成3-5条战略建议：
 
 竞品：{', '.join(analysis_report.competitors)}
@@ -498,6 +624,7 @@ class WriterAgent:
 
 风险：
 {chr(10).join(analysis_report.risks)}
+{rag_part}
 
 请以Markdown列表格式输出战略建议，每条建议要具体、可执行。
 """
@@ -508,8 +635,7 @@ class WriterAgent:
         ]
 
         try:
-            response = self.llm.invoke(messages)
-            strategy = response.content.strip()
+            strategy = self._invoke(messages).strip()
         except Exception as e:
             logger.error(f"生成战略建议失败: {e}")
             strategy = "*建议生成失败*"

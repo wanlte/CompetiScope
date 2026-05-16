@@ -1,11 +1,13 @@
 """
-竞品分析Agent系统 - 主入口
+竞品分析Agent系统 - 主入口 (v2)
 
 提供命令行界面和API接口来启动竞品分析任务
+Phase 1 升级: 异步执行 + 费用追踪
 """
 
 import os
 import sys
+import asyncio
 import argparse
 import logging
 from pathlib import Path
@@ -165,7 +167,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def run_analysis(
+async def run_analysis_async(
     competitors: list[str],
     report_type: str = "full",
     dimensions: Optional[list[str]] = None,
@@ -174,7 +176,7 @@ def run_analysis(
     output_dir: Optional[str] = None
 ) -> dict:
     """
-    执行竞品分析
+    异步执行竞品分析
 
     Args:
         competitors: 竞品列表
@@ -187,11 +189,9 @@ def run_analysis(
     Returns:
         分析结果
     """
-    # 初始化主管Agent
     manager = ManagerAgent()
 
-    # 执行分析
-    result = manager.analyze(
+    result = await manager.analyze_async(
         competitors=competitors,
         analysis_dimensions=dimensions,
         report_type=report_type,
@@ -199,14 +199,11 @@ def run_analysis(
         show_progress=show_progress,
     )
 
-    # 保存报告
     if result.get("success") and result.get("report"):
-        # 确定文件名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        competitor_str = "_".join(competitors[:2])  # 取前两个竞品名
+        competitor_str = "_".join(competitors[:2])
         filename = f"竞品分析_{competitor_str}_{timestamp}.md"
 
-        # 保存报告
         output_path = output_dir or str(OutputConfig.OUTPUT_DIR)
         filepath = Path(output_path) / filename
         filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -220,14 +217,14 @@ def run_analysis(
     return result
 
 
-def run_smart_analysis(
+async def run_smart_analysis_async(
     target: str,
     report_type: str = "full",
     show_progress: bool = True,
     output_dir: Optional[str] = None
 ) -> dict:
     """
-    智能规划模式分析
+    智能规划模式异步分析
 
     Args:
         target: 目标公司
@@ -238,17 +235,14 @@ def run_smart_analysis(
     Returns:
         分析结果
     """
-    # 初始化主管Agent
     manager = ManagerAgent()
 
-    # 执行分析
-    result = manager.analyze_with_planning(
+    result = await manager.analyze_with_planning_async(
         target_company=target,
         report_type=report_type,
         show_progress=show_progress,
     )
 
-    # 保存报告
     if result.get("success") and result.get("report"):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"竞品分析_{target}_{timestamp}.md"
@@ -266,6 +260,15 @@ def run_smart_analysis(
     return result
 
 
+# 同步兼容接口
+def run_analysis(**kwargs) -> dict:
+    return asyncio.run(run_analysis_async(**kwargs))
+
+
+def run_smart_analysis(**kwargs) -> dict:
+    return asyncio.run(run_smart_analysis_async(**kwargs))
+
+
 def print_banner():
     """打印Banner"""
     banner = """
@@ -280,23 +283,15 @@ def print_banner():
     print(banner)
 
 
-def main():
-    """主函数"""
-    # 解析参数
+async def main_async():
+    """异步主函数"""
     args = parse_arguments()
-
-    # 设置日志
     setup_logging(args.log_level)
-
-    # 打印Banner
     print_banner()
-
-    # 设置环境
     setup_environment()
 
-    logger.info("竞品分析系统启动")
+    logger.info("竞品分析系统启动 (Async v2)")
 
-    # Dry run模式
     if args.dry_run:
         logger.info("配置验证模式")
         is_valid, errors = validate_config()
@@ -308,31 +303,26 @@ def main():
                 print(f"   - {error}")
         return
 
-    # 检查必要参数
     if not args.competitors and not args.target:
         print("❌ 错误: 请指定竞品列表(--competitors)或目标公司(--target)")
         print("       使用 --help 查看帮助")
         sys.exit(1)
 
     try:
-        # 确定分析维度
         dimensions = None
         if args.dimensions:
             dimensions = [d.strip() for d in args.dimensions.split(",")]
 
-        # 执行分析
         if args.target:
-            # 智能规划模式
-            result = run_smart_analysis(
+            result = await run_smart_analysis_async(
                 target=args.target,
                 report_type=args.report_type,
                 show_progress=not args.no_progress,
                 output_dir=args.output,
             )
         else:
-            # 直接指定竞品
             competitors = [c.strip() for c in args.competitors.split(",")]
-            result = run_analysis(
+            result = await run_analysis_async(
                 competitors=competitors,
                 report_type=args.report_type,
                 dimensions=dimensions,
@@ -341,13 +331,20 @@ def main():
                 output_dir=args.output,
             )
 
-        # 输出结果
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         if result.get("success"):
             print("✅ 竞品分析完成！")
             if result.get("output_file"):
                 print(f"📄 报告已保存: {result['output_file']}")
-            print(f"📊 分析了 {len(result.get('collected_data', []))} 个竞品")
+            if result.get("agent_steps"):
+                print(f"🤖 Agent 步数: {result['agent_steps']}")
+            if result.get("reflection_rounds"):
+                print(f"🔍 反思轮数: {result['reflection_rounds']}, 评分: {result.get('reflection_scores', [])}")
+            if result.get("collected_data"):
+                print(f"📊 分析了 {len(result['collected_data'])} 个竞品")
+            if result.get("cost"):
+                cost = result["cost"]
+                print(f"💰 API费用: ${cost['total_cost_usd']:.6f} ({cost['total_tokens']} tokens)")
         else:
             print("❌ 竞品分析失败")
             if result.get("error"):
@@ -363,15 +360,20 @@ def main():
         sys.exit(1)
 
 
+def main():
+    """主函数入口（同步包装）"""
+    asyncio.run(main_async())
+
+
 # API接口函数（供其他模块调用）
-def analyze_competitors(
+async def analyze_competitors_async(
     competitors: list[str],
     report_type: str = "full",
     dimensions: Optional[list[str]] = None,
     our_product: Optional[str] = None,
 ) -> dict:
     """
-    分析竞品的API函数
+    异步分析竞品的API函数
 
     Args:
         competitors: 竞品列表
@@ -383,8 +385,7 @@ def analyze_competitors(
         分析结果字典
     """
     setup_environment()
-
-    return run_analysis(
+    return await run_analysis_async(
         competitors=competitors,
         report_type=report_type,
         dimensions=dimensions,
@@ -393,27 +394,25 @@ def analyze_competitors(
     )
 
 
-def analyze_target(
-    target: str,
-    report_type: str = "full"
-) -> dict:
-    """
-    智能分析目标公司的API函数
+def analyze_competitors(**kwargs) -> dict:
+    """同步兼容接口"""
+    return asyncio.run(analyze_competitors_async(**kwargs))
 
-    Args:
-        target: 目标公司
-        report_type: 报告类型
 
-    Returns:
-        分析结果字典
-    """
+async def analyze_target_async(target: str, report_type: str = "full") -> dict:
+    """异步智能分析目标公司的API函数"""
     setup_environment()
+    return await run_smart_analysis_async(target=target, report_type=report_type, show_progress=True)
 
-    return run_smart_analysis(
-        target=target,
-        report_type=report_type,
-        show_progress=True,
-    )
+
+def analyze_target(**kwargs) -> dict:
+    """同步兼容接口"""
+    return asyncio.run(analyze_target_async(**kwargs))
+
+
+def main_cli():
+    """pyproject.toml [project.scripts] 入口"""
+    main()
 
 
 if __name__ == "__main__":

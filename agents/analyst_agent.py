@@ -1,24 +1,33 @@
 """
-分析Agent模块
+分析Agent模块 (v2)
 
 负责对采集的竞品数据进行深度分析，包括：
 - 功能对比矩阵
 - SWOT分析
 - 竞争格局分析
 - 趋势预测
+
+Phase 1 升级: Provider 模式
 """
 
 import json
+import asyncio
 from typing import Optional, Literal
 from dataclasses import dataclass, field
 from loguru import logger
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from config.prompts import ANALYZER_SYSTEM_PROMPT
-from config.settings import LLMConfig, LLMRequestConfig
+from config.settings import (
+    LLMConfig, LLMRequestConfig, ProviderConfig as SettingsProvider,
+    KnowledgeBaseConfig,
+)
+from llm.provider import BaseLLMProvider
+from llm.openai_provider import OpenAIProvider
+from llm.types import ProviderConfig as LLMProviderConfig
 from agents.collector_agent import CollectedData
+from rag.knowledge_base import KnowledgeBase
 
 
 @dataclass
@@ -38,6 +47,15 @@ class SWOTAnalysis:
     weaknesses: list[str] = field(default_factory=list)  # 劣势
     opportunities: list[str] = field(default_factory=list)  # 机会
     threats: list[str] = field(default_factory=list)     # 威胁
+
+    def to_dict(self) -> dict:
+        return {
+            "competitor": self.competitor,
+            "strengths": self.strengths,
+            "weaknesses": self.weaknesses,
+            "opportunities": self.opportunities,
+            "threats": self.threats,
+        }
 
 
 @dataclass
@@ -94,27 +112,55 @@ class AnalystAgent:
 
     def __init__(
         self,
+        provider: Optional[BaseLLMProvider] = None,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        knowledge_base: Optional[KnowledgeBase] = None,
     ):
         """
         初始化分析Agent
 
         Args:
-            model: 模型名称（默认使用配置）
-            api_key: API密钥（默认使用配置）
-            base_url: API基础URL（默认使用配置）
+            provider: LLM Provider（优先使用，推荐）
+            model: 模型名称（回退兼容）
+            api_key: API密钥（回退兼容）
+            base_url: API基础URL（回退兼容）
+            knowledge_base: 知识库 (RAG)
         """
-        self.llm = ChatOpenAI(
-            model=model or LLMConfig.get_model(),
-            api_key=api_key or LLMConfig.get_api_key(),
-            base_url=base_url or LLMConfig.get_base_url(),
-            temperature=LLMRequestConfig.TEMPERATURE,
-            max_tokens=LLMRequestConfig.MAX_TOKENS,
-        )
+        if provider:
+            self.provider = provider
+        else:
+            provider_config = LLMProviderConfig(**SettingsProvider.to_dict())
+            if model:
+                provider_config.model = model
+            if api_key:
+                provider_config.api_key = api_key
+            if base_url:
+                provider_config.base_url = base_url
+            self.provider = OpenAIProvider(provider_config)
 
-        logger.info("AnalystAgent初始化完成")
+        # 向后兼容
+        self.llm = self.provider
+
+        # 初始化知识库 (RAG)
+        self.kb = knowledge_base
+        if self.kb is None and KnowledgeBaseConfig.ENABLED:
+            try:
+                self.kb = KnowledgeBase(
+                    persist_dir=KnowledgeBaseConfig.PERSIST_DIR,
+                    enabled=True,
+                )
+                logger.info("KnowledgeBase (RAG) 已启用")
+            except Exception as exc:
+                logger.warning(f"KnowledgeBase 初始化失败，RAG 已停用: {exc}")
+                self.kb = KnowledgeBase(enabled=False)
+
+        logger.info("AnalystAgent (v2) 初始化完成")
+
+    def _invoke(self, messages: list) -> str:
+        """同步 LLM 调用辅助方法"""
+        return asyncio.run(self.provider.ainvoke(messages)).content
 
     def analyze_feature_comparison(
         self,
@@ -173,8 +219,7 @@ class AnalystAgent:
         ]
 
         try:
-            response = self.llm.invoke(messages)
-            content = response.content.strip()
+            content = self._invoke(messages).strip()
 
             # 解析JSON
             if content.startswith("```"):
@@ -260,8 +305,7 @@ class AnalystAgent:
             ]
 
             try:
-                response = self.llm.invoke(messages)
-                content = response.content.strip()
+                content = self._invoke(messages).strip()
 
                 # 解析JSON
                 if content.startswith("```"):
@@ -352,8 +396,7 @@ class AnalystAgent:
         ]
 
         try:
-            response = self.llm.invoke(messages)
-            content = response.content.strip()
+            content = self._invoke(messages).strip()
 
             if content.startswith("```"):
                 content = content.split("```")[1]
@@ -417,8 +460,7 @@ SWOT分析：
         ]
 
         try:
-            response = self.llm.invoke(messages)
-            content = response.content.strip()
+            content = self._invoke(messages).strip()
 
             if content.startswith("```"):
                 content = content.split("```")[1]
@@ -437,6 +479,46 @@ SWOT分析：
         except Exception as e:
             logger.error(f"提取洞察失败: {e}")
             return [], [], []
+
+    def _get_historical_context(self, competitors: list[str]) -> dict:
+        """Retrieve historical analysis data from knowledge base."""
+        if not self.kb or not self.kb.enabled:
+            return {}
+
+        context = {}
+        for competitor in competitors:
+            try:
+                history = self.kb.get_competitor_history(competitor, n_results=3)
+                if any(history.values()):
+                    context[competitor] = history
+                    logger.info(f"  📚 RAG: retrieved historical context for '{competitor}'")
+            except Exception as exc:
+                logger.debug(f"RAG retrieval failed for '{competitor}': {exc}")
+
+        return context
+
+    def _enrich_prompt_with_rag(self, base_prompt: str, competitors: list[str]) -> str:
+        """Augment an analysis prompt with RAG context."""
+        if not KnowledgeBaseConfig.INJECT_HISTORY_IN_ANALYSIS:
+            return base_prompt
+
+        context = self._get_historical_context(competitors)
+        if not context:
+            return base_prompt
+
+        rag_section = "\n\n## 历史分析数据（RAG 知识库检索结果）\n"
+        for comp, history in context.items():
+            rag_section += f"\n### {comp}\n"
+            if history.get("reports"):
+                rag_section += "**历史报告片段**:\n"
+                for h in history["reports"][:2]:
+                    rag_section += f"- {h.get('content', '')[:300]}\n"
+            if history.get("collected_data"):
+                rag_section += "**历史采集数据**:\n"
+                for h in history["collected_data"][:2]:
+                    rag_section += f"- {h.get('content', '')[:200]}\n"
+
+        return base_prompt + rag_section
 
     def analyze_all(
         self,
@@ -457,11 +539,14 @@ SWOT分析：
 
         competitors = [d.competitor for d in collected_data]
 
+        # RAG: pre-load historical context
+        historical_context = self._get_historical_context(competitors)
+
         # 1. 功能对比分析
         feature_comparison = self.analyze_feature_comparison(collected_data, our_features)
 
         # 2. SWOT分析
-        swot_analysis = self.analyze_swot(collected_data)
+        swot_analysis = self._analyze_swot_with_rag(collected_data, historical_context)
 
         # 3. 竞争格局分析
         competitive_landscape = self.analyze_competitive_landscape(
@@ -485,6 +570,84 @@ SWOT分析：
 
         logger.info("竞品分析完成")
         return report
+
+    def _analyze_swot_with_rag(
+        self,
+        collected_data: list[CollectedData],
+        historical_context: dict,
+    ) -> list[SWOTAnalysis]:
+        """SWOT analysis with RAG-enhanced context."""
+        results = []
+        for data in collected_data:
+            logger.info(f"分析【{data.competitor}】SWOT")
+
+            hist = historical_context.get(data.competitor, {})
+            rag_context = ""
+            if hist:
+                if hist.get("reports"):
+                    rag_context += "\n\n历史分析参考：\n" + "\n".join(
+                        h.get("content", "")[:300] for h in hist["reports"][:2]
+                    )
+
+            prompt = f"""对{data.competitor}进行SWOT分析。
+
+公司基本信息：
+{json.dumps(data.basic_info, ensure_ascii=False, indent=2)}
+
+产品功能：
+{json.dumps(data.product_features, ensure_ascii=False, indent=2)}
+
+市场表现：
+{json.dumps(data.market_performance, ensure_ascii=False, indent=2)}
+
+用户评价：
+{json.dumps(data.user_reviews, ensure_ascii=False, indent=2)}
+
+战略动态：
+{json.dumps(data.strategic_news, ensure_ascii=False, indent=2)}
+{rag_context}
+
+请输出JSON格式的SWOT分析：
+{{
+  "competitor": "{data.competitor}",
+  "strengths": ["优势1", "优势2"],
+  "weaknesses": ["劣势1", "劣势2"],
+  "opportunities": ["机会1", "机会2"],
+  "threats": ["威胁1", "威胁2"]
+}}
+
+要求：
+- 每个类别至少3条
+- 描述要具体，基于提供的数据
+- 如有历史分析，参考但不抄袭
+- 使用中文
+"""
+
+            messages = [
+                SystemMessage(content=ANALYZER_SYSTEM_PROMPT),
+                HumanMessage(content=prompt),
+            ]
+
+            try:
+                content = self._invoke(messages).strip()
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                swot_data = json.loads(content)
+                results.append(SWOTAnalysis(
+                    competitor=swot_data.get("competitor", data.competitor),
+                    strengths=swot_data.get("strengths", []),
+                    weaknesses=swot_data.get("weaknesses", []),
+                    opportunities=swot_data.get("opportunities", []),
+                    threats=swot_data.get("threats", []),
+                ))
+            except Exception as e:
+                logger.error(f"【{data.competitor}】SWOT分析失败: {e}")
+                results.append(SWOTAnalysis(competitor=data.competitor))
+
+        logger.info(f"SWOT分析完成")
+        return results
 
     def generate_feature_table(
         self,

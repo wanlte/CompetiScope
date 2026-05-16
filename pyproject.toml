@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "competiscope"
+version = "2.0.0"
+description = "企业级竞品分析Agent系统 — 基于ReAct Agent + RAG + Async的智能竞争情报平台"
+readme = {text = "竞品分析Agent系统 (CompetiScope) — AI-powered competitive analysis platform", content-type = "text/plain"}
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "wanlte"}
+]
+keywords = ["ai", "agent", "rag", "competitive-analysis", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # LLM
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+    "langchain>=0.1.0",
+    "langchain-openai>=0.0.5",
+    "langchain-core>=0.1.0",
+    # HTTP / Async
+    "httpx>=0.25.0",
+    "aiohttp>=3.9.0",
+    "requests>=2.31.0",
+    "anyio>=4.0.0",
+    # Search
+    "duckduckgo-search>=4.0.0",
+    "beautifulsoup4>=4.12.0",
+    # Config
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    # Resilience
+    "tenacity>=8.2.0",
+    # Data
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    # Formats
+    "markdown>=3.5.0",
+    "markdownify>=0.11.0",
+    "orjson>=3.9.0",
+    # Logging
+    "loguru>=0.7.0",
+    # RAG (Phase 3)
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0",
+    # API (Phase 4)
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "sse-starlette>=1.8.0",
+    # Web UI (Phase 4)
+    "streamlit>=1.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "mypy>=1.7.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+competiscope = "main:main_cli"
+
+[tool.setuptools]
+packages = ["agents", "config", "tools", "llm", "types", "cache", "agent", "rag", "api", "observability", "core"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100

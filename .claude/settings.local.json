@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_rag.py tests/test_agent.py tests/test_collector.py tests/test_analyst.py -v --tb=line)",
+      "Bash(pip install *)",
+      "Bash(python *)"
+    ]
+  }
+}
